@@ -30,7 +30,7 @@ def generate_from_text(model, text, tokenizer, max_length=200, greedy=False, top
 
 def main():
     args = get_args()
-    print(f"Loading model", flush=True)
+    print(f"Loading model")
 
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, padding_side="left")
 
@@ -38,7 +38,7 @@ def main():
     start = datetime.datetime.now()
     model = AutoModelForCausalLM.from_pretrained(
         args.checkpoint,
-        device_map="auto" if args.parallelize else None,
+        device_map="auto",
         torch_dtype=torch.bfloat16,
         revision="gs{}".format(args.global_step) if args.global_step else None
     )
