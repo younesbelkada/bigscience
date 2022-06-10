@@ -42,7 +42,6 @@ def main():
         torch_dtype=torch.bfloat16,
         revision="gs{}".format(args.global_step) if args.global_step else None
     )
-    model.eval()
     print(f"Loaded model in {datetime.datetime.now() - start}")
 
     text = ''
@@ -51,8 +50,8 @@ def main():
             dummy = input('''Enter the paragraph (Enter for new line and Ctrl-c to end the prompt):''')+'\n'
             text += dummy
         except KeyboardInterrupt:
-            output = generate_from_text(model, text, tokenizer, max_length=args.generate_max_length, greedy=args.greedy, top_k=args.top_k)
-            print(output)
+            pipe = pipeline(task="text-generation", model=model, tokenizer=tokenizer, device=torch.device(0), max_new_tokens=args.generate_max_length, greedy=args.greedy, top_k=args.top_k)
+            print(pipe)
             text = ''
 
 if __name__ == "__main__":
