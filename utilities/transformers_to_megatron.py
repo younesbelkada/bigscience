@@ -1,7 +1,8 @@
 import argparse
-import opcode
+import json
 import re, os
 import torch
+from transformers import ImageGPTForImageClassification
 
 def layer_name_mapping(key):
     """Convert transformers PP in Megatron-DeepSpeed TP/PP weights mapping"""
@@ -54,11 +55,16 @@ def convert_self_att(state_dict):
 
     return state_dict
 
+def check_all_keys(state_dict):
+    pass
+
 def convert_opt_checkpoint_to_megatron(
-    opt_checkpoint_path, megatron_dump_folder_path
+    opt_checkpoint_path, megatron_dump_folder_path, opt_config_path,
 ):
     file_names = os.listdir(opt_checkpoint_path)
     file_names = list(sorted(filter(lambda s: s.startswith("pytorch_model") and ".bin" in s, file_names)))
+    index_file = json.load(open(opt_config_path, "r"))["weight_map"]
+
 
     # We need one file per layer
     for i, file in enumerate(file_names):
@@ -72,15 +78,18 @@ def convert_opt_checkpoint_to_megatron(
                 new_file_names[file_name] = [(key, meg_key)]
             else:
                 new_file_names[file_name].append((key, meg_key))
+        converted_meg_tensor = {}
         for file_name in new_file_names.keys():
             print("Writing file:", file_name)
-            converted_meg_tensor = {}
             is_attn = False
             for key_tuple in new_file_names[file_name]:
                 key, meg_key = key_tuple
                 meg_key = post_process_transformers_keys(meg_key)
-                # TODO convert the qkv layers to megatron format
-                converted_meg_tensor[meg_key] = temp[key]
+                # TODO check if they are on the same file
+                final_weights = temp[key]
+                if file != index_file[key]:
+                    final_weights = torch.load(os.path.join(opt_checkpoint_path, index_file[key]), map_location="cpu")[key]
+                converted_meg_tensor[meg_key] = final_weights
                 if "self_attn" in key:
                     is_attn = True
             if is_attn:
@@ -100,7 +109,14 @@ if __name__ == "__main__":
         help="Path to the transformers OPT checkpoint path.",
     )
     parser.add_argument(
+        "--opt_sharded_index_path",
+        default=None,
+        type=str,
+        required=True,
+        help="Path to the transformers OPT checkpoint metadata path.",
+    )
+    parser.add_argument(
         "--megatron_dump_folder_path", default=None, type=str, required=True, help="Path to the output Megatron-DS model."
     )
     args = parser.parse_args()
-    convert_opt_checkpoint_to_megatron(args.opt_checkpoint_path, args.megatron_dump_folder_path)
+    convert_opt_checkpoint_to_megatron(args.opt_checkpoint_path, args.megatron_dump_folder_path, args.opt_sharded_index_path)
