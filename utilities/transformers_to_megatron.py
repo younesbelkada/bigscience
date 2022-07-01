@@ -2,7 +2,62 @@ import argparse
 import json
 import re, os
 import torch
-from transformers import ImageGPTForImageClassification
+
+ALL_KEYS_OPT = [ # This should contain all the keys on a transformers block
+    "fc1.weight",
+    "fc1.bias",
+    "fc2.weight",
+    "fc2.bias",
+    "self_attn_layer_norm.weight",
+    "self_attn_layer_norm.bias",
+    "self_attn.q_proj.weight"
+    "self_attn.q_proj.bias",
+    "self_attn.k_proj.weight",
+    "self_attn.k_proj.bias",
+    "self_attn.v_proj.weight",
+    "self_attn.v_proj.bias",
+    "self_attn.out_proj.weight",
+    "self_attn.out_proj.bias",
+    "final_layer_norm.weight",
+    "final_layer_norm.bias",
+]
+
+ALL_KEYS_MEG = ['input_layernorm.weight', 'input_layernorm.bias', 'self_attention.query_key_value.weight', 'self_attention.query_key_value.bias', 'self_attention.dense.weight', 'self_attention.dense.bias', 'post_attention_layernorm.weight', 'post_attention_layernorm.bias', 'mlp.dense_h_to_4h.weight', 'mlp.dense_h_to_4h.bias', 'mlp.dense_4h_to_h.weight', 'mlp.dense_4h_to_h.bias']
+
+
+def file_name_from_key(key):
+    layer_number = int(re.match(r".*decoder.layers.(\d*).*", key)[1])
+    layer_number += 3
+    file_name = "layer_" + str(layer_number).zfill(2)+"-model_00-model_states.pt"
+    return file_name
+
+def config_to_mapping(config):
+    layer_mapping = {
+        "layer_01-model_00-model_states.pt": 
+        [
+            ["decoder.embed_positions.weight", "decoder.embed_tokens.weight"], 
+            ["pytorch_model-00001-of-00037.bin", "pytorch_model-00001-of-00037.bin"]
+        ],
+        "layer_99-model_00-model_states.pt":
+        [
+            ["decoder.final_layer_norm.weight", "decoder.final_layer_norm.bias"],
+            ["pytorch_model-00001-of-00037.bin", "pytorch_model-00001-of-00037.bin"],
+        ],
+    }
+    config.pop("decoder.embed_tokens.weight")
+    config.pop("decoder.embed_positions.weight")
+    config.pop("decoder.final_layer_norm.weight")
+    config.pop("decoder.final_layer_norm.bias")
+
+    for key in config.keys():
+        corresponding_pt_file = file_name_from_key(key)
+        if corresponding_pt_file not in layer_mapping:
+            layer_mapping[corresponding_pt_file] = [[], []]
+        layer_mapping[corresponding_pt_file][0].append(key)
+        layer_mapping[corresponding_pt_file][1].append(config[key])
+            
+    return layer_mapping
+
 
 def layer_name_mapping(key):
     """Convert transformers PP in Megatron-DeepSpeed TP/PP weights mapping"""
@@ -33,7 +88,7 @@ def post_process_transformers_keys(key):
         "self_attn_layer_norm.weight": "input_layernorm.weight", # this corresponds to this line: https://github.com/huggingface/transformers/blob/49cd736a288a315d741e5c337790effa4c9fa689/src/transformers/models/opt/modeling_opt.py#L315
         "self_attn_layer_norm.bias": "input_layernorm.bias",
         "self_attn.out_proj.weight":"self_attention.dense.weight",
-        "self_attn.out_proj.bias":"self_attention.qense.bias",
+        "self_attn.out_proj.bias":"self_attention.dense.bias",
         "final_layer_norm.weight":"post_inter_attention_layernorm.weight", # OPT-175 do layer norm before mlp block: https://github.com/huggingface/transformers/blob/49cd736a288a315d741e5c337790effa4c9fa689/src/transformers/models/opt/modeling_opt.py#L339
         "final_layer_norm.bias":"post_inter_attention_layernorm.bias", # there is no post-attention layer norm
     }
@@ -55,8 +110,7 @@ def convert_self_att(state_dict):
 
     return state_dict
 
-def check_all_keys(state_dict):
-    pass
+
 
 def convert_opt_checkpoint_to_megatron(
     opt_checkpoint_path, megatron_dump_folder_path, opt_config_path,
@@ -65,37 +119,65 @@ def convert_opt_checkpoint_to_megatron(
     file_names = list(sorted(filter(lambda s: s.startswith("pytorch_model") and ".bin" in s, file_names)))
     index_file = json.load(open(opt_config_path, "r"))["weight_map"]
 
+    layer_mapping = config_to_mapping(index_file)
+    
+    current_file = ""
+    temp = None
+    is_attn = False
+
+    for file_name in layer_mapping.keys():
+        converted_meg_tensor = {}
+        files_to_load = layer_mapping[file_name][1]
+        keys_to_match = layer_mapping[file_name][0]
+        for i, key in enumerate(keys_to_match):
+            file_to_load = files_to_load[i]
+            if file_to_load != current_file:
+                temp = torch.load(os.path.join(opt_checkpoint_path, file_to_load), map_location="cpu")
+                current_file = file_to_load
+            assert key in temp.keys()
+            _, meg_key = layer_name_mapping(key)
+            meg_key = post_process_transformers_keys(meg_key)
+            converted_meg_tensor[meg_key] = temp[key]
+            if "self_attn" in key:
+                is_attn = True
+        
+        if is_attn:
+            converted_meg_tensor = convert_self_att(converted_meg_tensor)
+            is_attn = False
+        torch.save(converted_meg_tensor, os.path.join(megatron_dump_folder_path, file_name+'.pt'))
+        
+
 
     # We need one file per layer
-    for i, file in enumerate(file_names):
-        print("Processing file:", file)
-        temp = torch.load(os.path.join(opt_checkpoint_path, file), map_location="cpu")
-        keys = list(temp.keys())
-        new_file_names = {}
-        for key in keys:
-            file_name, meg_key = layer_name_mapping(key)
-            if file_name not in new_file_names.keys():
-                new_file_names[file_name] = [(key, meg_key)]
-            else:
-                new_file_names[file_name].append((key, meg_key))
-        converted_meg_tensor = {}
-        for file_name in new_file_names.keys():
-            print("Writing file:", file_name)
-            is_attn = False
-            for key_tuple in new_file_names[file_name]:
-                key, meg_key = key_tuple
-                meg_key = post_process_transformers_keys(meg_key)
-                # TODO check if they are on the same file
-                final_weights = temp[key]
-                if file != index_file[key]:
-                    final_weights = torch.load(os.path.join(opt_checkpoint_path, index_file[key]), map_location="cpu")[key]
-                converted_meg_tensor[meg_key] = final_weights
-                if "self_attn" in key:
-                    is_attn = True
-            if is_attn:
-                converted_meg_tensor = convert_self_att(converted_meg_tensor)
-                is_attn = False
-            torch.save(converted_meg_tensor, os.path.join(megatron_dump_folder_path, file_name+'.pt'))
+    # for i, file in enumerate(file_names):
+    #     print("Processing file:", file)
+    #     temp = torch.load(os.path.join(opt_checkpoint_path, file), map_location="cpu")
+    #     if i != 0:
+    #         keys = list(temp.keys())
+    #     else:
+    #         keys = get_all_keys()
+    #     new_file_names = {}
+    #     for key in keys:
+    #         file_name, meg_key = layer_name_mapping(key)
+    #         if file_name not in new_file_names.keys():
+    #             new_file_names[file_name] = [(key, meg_key)]
+    #         else:
+    #             new_file_names[file_name].append((key, meg_key))
+    #     converted_meg_tensor = {}
+    #     for file_name in new_file_names.keys():
+    #         print("Writing file:", file_name)
+    #         is_attn = False
+    #         for key_tuple in new_file_names[file_name]:
+    #             key, meg_key = key_tuple
+    #             meg_key = post_process_transformers_keys(meg_key)
+    #             # TODO check if they are on the same file
+    #             converted_meg_tensor[meg_key] = temp[key]
+    #             if "self_attn" in key:
+    #                 is_attn = True
+    #         if is_attn:
+    #             converted_meg_tensor = convert_self_att(converted_meg_tensor)
+    #             is_attn = False
+    #         torch.save(converted_meg_tensor, os.path.join(megatron_dump_folder_path, file_name+'.pt'))
 
 
 if __name__ == "__main__":
