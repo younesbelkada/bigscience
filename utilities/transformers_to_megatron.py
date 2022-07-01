@@ -31,8 +31,10 @@ def post_process_transformers_keys(key):
         "fc2.bias": "mlp.dense_4h_to_h.bias",
         "self_attn_layer_norm.weight": "input_layernorm.weight", # this corresponds to this line: https://github.com/huggingface/transformers/blob/49cd736a288a315d741e5c337790effa4c9fa689/src/transformers/models/opt/modeling_opt.py#L315
         "self_attn_layer_norm.bias": "input_layernorm.bias",
+        "self_attn.out_proj.weight":"self_attention.dense.weight",
+        "self_attn.out_proj.bias":"self_attention.qense.bias",
         "final_layer_norm.weight":"post_inter_attention_layernorm.weight", # OPT-175 do layer norm before mlp block: https://github.com/huggingface/transformers/blob/49cd736a288a315d741e5c337790effa4c9fa689/src/transformers/models/opt/modeling_opt.py#L339
-        "final_layer_norm.bias":"post_inter_attention_layernorm.bias",
+        "final_layer_norm.bias":"post_inter_attention_layernorm.bias", # there is no post-attention layer norm
     }
     if key in layer_rename_map:
         return layer_rename_map[key]
