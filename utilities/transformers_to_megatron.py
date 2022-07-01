@@ -126,6 +126,7 @@ def convert_opt_checkpoint_to_megatron(
     is_attn = False
 
     for file_name in layer_mapping.keys():
+        print("Creating file:", file_name)
         converted_meg_tensor = {}
         files_to_load = layer_mapping[file_name][1]
         keys_to_match = layer_mapping[file_name][0]
