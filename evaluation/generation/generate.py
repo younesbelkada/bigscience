@@ -48,6 +48,7 @@ def main():
         max_memory=get_gpus_max_memory(args.max_memory),
         offload_folder=args.offload_folder if args.parallelize else None,
     )
+
     print(f"Loaded model in {datetime.datetime.now() - start}")
 
     while True:

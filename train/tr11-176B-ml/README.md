@@ -8,7 +8,11 @@ Auto-regressive objective using regular Megatron-LM GPT2 language model w/ multi
 
 Model size: 176B
 
-The training started on March 11, 2022 11:42am PST
+Brief chronology:
+
+1. The training started on March 11, 2022 11:42am PST
+2. Epoch one finished on June 28, 2022, (iteration 85376) and then we continued a bit more as we still had the resources
+3. The training switched from 48 to 24 nodes on July 4, 2022 9pm PST
 
 To calculate how many days left to 341B-token goal - take the current consumed tokens and feed it to (e.g. with 192755367936)
 
@@ -45,7 +49,7 @@ Hardware:
 
 Software:
 
-- [Megatron-DeepSpeed](https://github.com/bigscience-workshop/Megatron-DeepSpeed) @  `ds_ckpt_reshape-with-layer-norm-auto-sync` PR branch
+- [Megatron-DeepSpeed](https://github.com/bigscience-workshop/Megatron-DeepSpeed) @  `ds_ckpt_reshape` PR branch
 - [DeepSpeed](https://github.com/microsoft/DeepSpeed) @ olruwase/elastic-ckpt-refresh PR branch
 - [PyTorch](https://github.com/pytorch/pytorch)-1.11 w/ CUDA-11.5
 - [apex](https://github.com/NVIDIA/apex) @ master
@@ -649,6 +653,20 @@ NHIDDEN=14336; NLAYERS=70; SEQ_LEN=2048; VOCAB_SIZE=250680; python -c "h=$NHIDDE
 BF16 Transformer block size: 4.59GB, the rest is: 6.75GB, total 328.34GB
 ```
 
+### Important checkpoints
+
+The first epoch finished at:
+
+```
+[default7]: iteration   85376/ 115311 | consumed samples:   158692272 | consumed tokens: 325001773056 | elapsed time per iteration (s)
+: 104.70 | learning rate: 1.150E-05 | global batch size: 2048 | lm loss: 1.979558E+00 | grad norm: 0.132 | num zeros: 0.0 | number of sk
+ipped iterations:  0 | number of nan iterations:  0 | samples per second: 19.561 | TFLOPs: 149.77
+```
+
+So if someone wants the nearest checkpoint that is guaranteed to have had seen only one pass of data is 85k.
+
+
+
 ### Checkpoint reshaping
 
 It's not trivial to switch from one 3D topology to another due to TP and DP logic of Deepspeed. So we developed a special mechanism called universal checkpoint which converts whatever topology the last checkpoint was created with into a universal checkpoint which has each weight and optimizer state as a separate file. This is done after careful merging of weights split across TP ranks (some weights are averaged, some are concatenated on the first and some on the second dimension. And then DP ZeRO sharding gets unsharded. So this universal checkpoint can now be used to start any new topology or to create a HF Transformers checkpoint. Note that all weights are in fp32 - so no data is lost.
@@ -656,24 +674,24 @@ It's not trivial to switch from one 3D topology to another due to TP and DP logi
 
 As this is all new currently this requires that the code runs on the following 2 branches
 - `microsoft/DeepSpeed|olruwase/elastic-ckpt-refresh`
-- `bigscience-workshop/Megatron-DeepSpeed|ds_ckpt_reshape-with-layer-norm-auto-sync`
-
-The latter is really `bigscience-workshop/Megatron-DeepSpeed|ds_ckpt_reshape` but since we also have another bandaid branch that is being used it's merged with`layer-norm-auto-sync`.
+- `bigscience-workshop/Megatron-DeepSpeed||ds_ckpt_reshape`
 
 So say you want to switch from 48 to 24 nodes.
 
 1. allocate a new cpu node
 
 ```
-srun --pty --account=six@cpu --nodes=1 --ntasks=1 --partition=cpu_p1 --cpus-per-task=40 --time 6:00:00 --hint=nomultithread  --tasks-per-node=1 bash
-```
-
-2. convert the checkpoint, e.g. for `global_step90751`
+srun --pty --account=six@cpu --nodes=1 --ntasks=1 --partition=cpu_p1 --cpus-per-task=40 --time 6:00:00 --hint=nomultithread  --tasks-per-node=1 bash --rcfile $six_ALL_CCFRWORK/start-tr11-176B-ml
 
 ```
+
+2. convert the checkpoint, e.g. for `global_step94767`
+
+```
+cd $six_ALL_CCFRWORK/code/tr11-176B-ml/Megatron-DeepSpeed-checkpoint-reshape
 /usr/bin/time -v python tools/convert_checkpoint/ds_to_universal.py \
---input_folder $six_ALL_CCFRSCRATCH/checkpoints/tr11-176B-ml/checkpoints/main/global_step90751 \
---output_folder $six_ALL_CCFRSCRATCH/checkpoints/tr11-176B-ml/checkpoints/main/global_step90751_universal \
+--input_folder $six_ALL_CCFRSCRATCH/checkpoints/tr11-176B-ml/checkpoints/main/global_step94767 \
+--output_folder $six_ALL_CCFRSCRATCH/checkpoints/tr11-176B-ml/checkpoints/main/global_step94767_universal \
 --num_extract_workers 10 --num_merge_workers 4
 ```
 
